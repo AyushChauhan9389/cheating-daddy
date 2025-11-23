@@ -114,6 +114,7 @@ export class CheatingDaddyApp extends LitElement {
         _isClickThrough: { state: true },
         _awaitingNewResponse: { state: true },
         shouldAnimateResponse: { type: Boolean },
+        responseBenchmarks: { type: Array },
     };
 
     constructor() {
@@ -130,6 +131,8 @@ export class CheatingDaddyApp extends LitElement {
         this.layoutMode = localStorage.getItem('layoutMode') || 'normal';
         this.advancedMode = localStorage.getItem('advancedMode') === 'true';
         this.responses = [];
+        this.responseBenchmarks = [];
+        this._nextBenchmark = null;
         this.currentResponseIndex = -1;
         this._viewInstances = new Map();
         this._isClickThrough = false;
@@ -156,6 +159,9 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.on('click-through-toggled', (_, isEnabled) => {
                 this._isClickThrough = isEnabled;
             });
+            ipcRenderer.on('update-benchmark', (_, latency) => {
+                this.setBenchmark(latency);
+            });
         }
     }
 
@@ -166,6 +172,23 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.removeAllListeners('update-response');
             ipcRenderer.removeAllListeners('update-status');
             ipcRenderer.removeAllListeners('click-through-toggled');
+            ipcRenderer.removeAllListeners('update-benchmark');
+        }
+    }
+
+    setBenchmark(latency) {
+        // Store for the next response if we haven't created it yet
+        this._nextBenchmark = latency;
+        console.log('[setBenchmark] Received benchmark:', latency);
+
+        // If we happen to be in sync (new response just created but latency arrived late), update it
+        if (this.responseBenchmarks.length === this.responses.length && this.responses.length > 0) {
+            // Check if the last benchmark is null, if so update it
+            if (this.responseBenchmarks[this.responseBenchmarks.length - 1] === null) {
+                 this.responseBenchmarks = [...this.responseBenchmarks.slice(0, -1), latency];
+                 this._nextBenchmark = null;
+                 this.requestUpdate();
+            }
         }
     }
 
@@ -189,12 +212,15 @@ export class CheatingDaddyApp extends LitElement {
                 response.toLowerCase().includes('go on') ||
                 response.toLowerCase().includes('continue'));
 
+        let isNewResponse = false;
+
         if (this._awaitingNewResponse || this.responses.length === 0) {
             // Always add as new response when explicitly waiting for one
             this.responses = [...this.responses, response];
             this.currentResponseIndex = this.responses.length - 1;
             this._awaitingNewResponse = false;
             this._currentResponseIsComplete = false;
+            isNewResponse = true;
             console.log('[setResponse] Pushed new response:', response);
         } else if (!this._currentResponseIsComplete && !isFillerResponse && this.responses.length > 0) {
             // For substantial responses, update the last one (streaming behavior)
@@ -206,8 +232,21 @@ export class CheatingDaddyApp extends LitElement {
             this.responses = [...this.responses, response];
             this.currentResponseIndex = this.responses.length - 1;
             this._currentResponseIsComplete = false;
+            isNewResponse = true;
             console.log('[setResponse] Added response as new:', response);
         }
+
+        // If we added a new response, try to attach pending benchmark
+        if (isNewResponse) {
+            this.responseBenchmarks = [...this.responseBenchmarks, this._nextBenchmark];
+            this._nextBenchmark = null;
+        }
+
+        // Ensure benchmarks array stays in sync with responses array (fill holes with null)
+        while (this.responseBenchmarks.length < this.responses.length) {
+            this.responseBenchmarks.push(null);
+        }
+
         this.shouldAnimateResponse = true;
         this.requestUpdate();
     }
@@ -441,6 +480,7 @@ export class CheatingDaddyApp extends LitElement {
                 return html`
                     <assistant-view
                         .responses=${this.responses}
+                        .responseBenchmarks=${this.responseBenchmarks}
                         .currentResponseIndex=${this.currentResponseIndex}
                         .selectedProfile=${this.selectedProfile}
                         .onSendText=${message => this.handleSendText(message)}
