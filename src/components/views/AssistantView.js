@@ -289,10 +289,23 @@ export class AssistantView extends LitElement {
         .save-button svg {
             stroke: currentColor !important;
         }
+
+        .benchmark-display {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 10px;
+            color: var(--description-color);
+            background: rgba(0, 0, 0, 0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            pointer-events: none;
+        }
     `;
 
     static properties = {
         responses: { type: Array },
+        responseBenchmarks: { type: Array },
         currentResponseIndex: { type: Number },
         selectedProfile: { type: String },
         onSendText: { type: Function },
@@ -303,6 +316,7 @@ export class AssistantView extends LitElement {
     constructor() {
         super();
         this.responses = [];
+        this.responseBenchmarks = [];
         this.currentResponseIndex = -1;
         this.selectedProfile = 'interview';
         this.onSendText = () => {};
@@ -589,13 +603,23 @@ export class AssistantView extends LitElement {
         }
     }
 
+    getCurrentBenchmark() {
+        return this.responseBenchmarks && this.responseBenchmarks.length > 0 && this.currentResponseIndex >= 0
+            ? this.responseBenchmarks[this.currentResponseIndex]
+            : null;
+    }
+
     render() {
         const currentResponse = this.getCurrentResponse();
         const responseCounter = this.getResponseCounter();
         const isSaved = this.isResponseSaved();
+        const benchmark = this.getCurrentBenchmark();
 
         return html`
-            <div class="response-container" id="responseContainer"></div>
+            <div style="position: relative; height: calc(100% - 60px);">
+                <div class="response-container" id="responseContainer" style="height: 100%;"></div>
+                ${benchmark ? html`<div class="benchmark-display">${benchmark}ms</div>` : ''}
+            </div>
 
             <div class="text-input-container">
                 <button class="nav-button" @click=${this.navigateToPreviousResponse} ?disabled=${this.currentResponseIndex <= 0}>

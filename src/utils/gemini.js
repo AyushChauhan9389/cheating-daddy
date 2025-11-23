@@ -26,6 +26,7 @@ module.exports.formatSpeakerResults = formatSpeakerResults;
 // Audio capture variables
 let systemAudioProc = null;
 let messageBuffer = '';
+let lastRequestTimestamp = 0;
 
 // Reconnection tracking variables
 let reconnectionAttempts = 0;
@@ -259,6 +260,12 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                         for (const part of message.serverContent.modelTurn.parts) {
                             console.log(part);
                             if (part.text) {
+                                if (messageBuffer === '' && lastRequestTimestamp > 0) {
+                                    const latency = Date.now() - lastRequestTimestamp;
+                                    console.log('Time to first token:', latency + 'ms');
+                                    sendToRenderer('update-benchmark', latency);
+                                    lastRequestTimestamp = 0;
+                                }
                                 messageBuffer += part.text;
                                 sendToRenderer('update-response', messageBuffer);
                             }
@@ -598,6 +605,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             }
 
             console.log('Sending text message:', text);
+            lastRequestTimestamp = Date.now();
             await geminiSessionRef.current.sendRealtimeInput({ text: text.trim() });
             return { success: true };
         } catch (error) {
