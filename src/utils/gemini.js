@@ -3,6 +3,10 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
+const { getApiKey } = require('../storage');
+
+// Live API Model - Updated to latest available
+const LIVE_MODEL = 'gemini-2.0-flash-exp';
 
 // Conversation tracking variables
 let currentSessionId = null;
@@ -168,6 +172,11 @@ async function attemptReconnection() {
     // Wait before attempting reconnection
     await new Promise(resolve => setTimeout(resolve, reconnectionDelay));
 
+    if (!lastSessionParams) {
+        console.warn('Reconnection aborted: Session parameters missing');
+        return false;
+    }
+
     try {
         const session = await initializeGeminiSession(
             lastSessionParams.apiKey,
@@ -223,9 +232,20 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
         reconnectionAttempts = 0; // Reset counter for new session
     }
 
+    // Use API Key from storage if not provided
+    const finalApiKey = apiKey || getApiKey();
+
+    if (!finalApiKey) {
+        console.error('No API key provided or found in storage');
+        sendToRenderer('update-status', 'Error: No API key found');
+        isInitializingSession = false;
+        sendToRenderer('session-initializing', false);
+        return null;
+    }
+
     const client = new GoogleGenAI({
         vertexai: false,
-        apiKey: apiKey,
+        apiKey: finalApiKey,
     });
 
     // Get enabled tools first to determine Google Search status
@@ -241,7 +261,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
 
     try {
         const session = await client.live.connect({
-            model: 'gemini-live-2.5-flash-preview',
+            model: LIVE_MODEL,
             callbacks: {
                 onopen: function () {
                     sendToRenderer('update-status', 'Live session connected');

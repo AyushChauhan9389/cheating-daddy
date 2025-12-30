@@ -119,17 +119,26 @@ export class CheatingDaddyApp extends LitElement {
 
     constructor() {
         super();
-        this.currentView = localStorage.getItem('onboardingCompleted') ? 'main' : 'onboarding';
+        this.currentView = 'loading'; // Start with loading state or default to onboarding if simpler
+        // Actually, we can't easily check onboarding status synchronously.
+        // Let's set a default and update it in connectedCallback.
+        // For UI stability, maybe default to 'onboarding' or a splash?
+        // Let's default to 'onboarding' but check status immediately.
+        this.currentView = 'onboarding';
+
         this.statusText = '';
         this.startTime = null;
         this.isRecording = false;
         this.sessionActive = false;
-        this.selectedProfile = localStorage.getItem('selectedProfile') || 'interview';
-        this.selectedLanguage = localStorage.getItem('selectedLanguage') || 'en-US';
-        this.selectedScreenshotInterval = localStorage.getItem('selectedScreenshotInterval') || '5';
-        this.selectedImageQuality = localStorage.getItem('selectedImageQuality') || 'medium';
-        this.layoutMode = localStorage.getItem('layoutMode') || 'normal';
-        this.advancedMode = localStorage.getItem('advancedMode') === 'true';
+
+        // Defaults
+        this.selectedProfile = 'interview';
+        this.selectedLanguage = 'en-US';
+        this.selectedScreenshotInterval = '5';
+        this.selectedImageQuality = 'medium';
+        this.layoutMode = 'normal';
+        this.advancedMode = false;
+
         this.responses = [];
         this.currentResponseIndex = -1;
         this._viewInstances = new Map();
@@ -139,7 +148,7 @@ export class CheatingDaddyApp extends LitElement {
         this.shouldAnimateResponse = false;
         this.isViewLocked = false;
 
-        // Apply layout mode to document root
+        // Apply layout mode to document root - will update after load
         this.updateLayoutMode();
     }
 
@@ -158,6 +167,42 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.on('click-through-toggled', (_, isEnabled) => {
                 this._isClickThrough = isEnabled;
             });
+        }
+
+        // Load initial state
+        this.loadInitialState();
+    }
+
+    async loadInitialState() {
+        if (!window.storage) return;
+
+        try {
+            const config = await window.storage.getConfig();
+            const prefs = await window.storage.getPreferences();
+
+            // Check onboarding
+            if (config.onboarded) {
+                this.currentView = 'main';
+            } else {
+                this.currentView = 'onboarding';
+            }
+
+            // Load preferences
+            if (prefs.selectedProfile) this.selectedProfile = prefs.selectedProfile;
+            if (prefs.selectedLanguage) this.selectedLanguage = prefs.selectedLanguage;
+            if (prefs.selectedScreenshotInterval) this.selectedScreenshotInterval = prefs.selectedScreenshotInterval;
+            if (prefs.selectedImageQuality) this.selectedImageQuality = prefs.selectedImageQuality;
+            if (prefs.advancedMode !== undefined) this.advancedMode = prefs.advancedMode;
+
+            // Load config
+            if (config.layout) {
+                this.layoutMode = config.layout;
+                this.updateLayoutMode();
+            }
+
+        } catch (e) {
+            console.error('Error loading initial state:', e);
+            // Fallback?
         }
     }
 
@@ -272,7 +317,13 @@ export class CheatingDaddyApp extends LitElement {
     // Main view event handlers
     async handleStart() {
         // check if api key is empty do nothing
-        const apiKey = localStorage.getItem('apiKey')?.trim();
+        let apiKey = '';
+        try {
+            apiKey = await window.storage?.getApiKey();
+        } catch (e) {
+            console.error('Error reading API key:', e);
+        }
+
         if (!apiKey || apiKey === '') {
             // Trigger the red blink animation on the API key input
             const mainView = this.shadowRoot.querySelector('main-view');
@@ -386,22 +437,33 @@ export class CheatingDaddyApp extends LitElement {
 
         // Only update localStorage when these specific properties change
         if (changedProperties.has('selectedProfile')) {
-            localStorage.setItem('selectedProfile', this.selectedProfile);
+            window.storage?.updatePreference('selectedProfile', this.selectedProfile);
         }
         if (changedProperties.has('selectedLanguage')) {
-            localStorage.setItem('selectedLanguage', this.selectedLanguage);
+            window.storage?.updatePreference('selectedLanguage', this.selectedLanguage);
         }
         if (changedProperties.has('selectedScreenshotInterval')) {
-            localStorage.setItem('selectedScreenshotInterval', this.selectedScreenshotInterval);
+            window.storage?.updatePreference('selectedScreenshotInterval', this.selectedScreenshotInterval);
         }
         if (changedProperties.has('selectedImageQuality')) {
-            localStorage.setItem('selectedImageQuality', this.selectedImageQuality);
+            window.storage?.updatePreference('selectedImageQuality', this.selectedImageQuality);
         }
         if (changedProperties.has('layoutMode')) {
             this.updateLayoutMode();
+            // layoutMode is config, not preference usually, but CustomizeView uses updateConfig('layout').
+            // Here we should probably not auto-save every change if CustomizeView already saves it?
+            // CustomizeView saves ON CHANGE.
+            // This `updated` method is triggered when properties change.
+            // If CustomizeView changes the property, it might trigger this.
+            // To avoid double writes, we can rely on CustomizeView handling the save.
+            // BUT, if other things change it (like `loadInitialState`), we don't want to re-save immediately.
+            // However, typical pattern in Lit is specific handlers save, `updated` might be for side effects.
+            // The original code saved to localStorage in `updated`.
+            // Let's keep it safe:
+            // window.storage?.updateConfig('layout', this.layoutMode); // CustomizeView handles this explicitly.
         }
         if (changedProperties.has('advancedMode')) {
-            localStorage.setItem('advancedMode', this.advancedMode.toString());
+            window.storage?.updatePreference('advancedMode', this.advancedMode);
         }
     }
 

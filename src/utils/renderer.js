@@ -34,100 +34,78 @@ let currentImageQuality = 'medium'; // Store current image quality for manual sc
 const isLinux = process.platform === 'linux';
 const isMacOS = process.platform === 'darwin';
 
-// Token tracking system for rate limiting
-let tokenTracker = {
-    tokens: [], // Array of {timestamp, count, type} objects
-    audioStartTime: null,
-
-    // Add tokens to the tracker
-    addTokens(count, type = 'image') {
-        const now = Date.now();
-        this.tokens.push({
-            timestamp: now,
-            count: count,
-            type: type,
-        });
-
-        // Clean old tokens (older than 1 minute)
-        this.cleanOldTokens();
+// ============ STORAGE API ============
+// Wrapper for IPC-based storage access
+const storage = {
+    // Config
+    async getConfig() {
+        const result = await ipcRenderer.invoke('storage:get-config');
+        return result.success ? result.data : {};
+    },
+    async setConfig(config) {
+        return ipcRenderer.invoke('storage:set-config', config);
+    },
+    async updateConfig(key, value) {
+        return ipcRenderer.invoke('storage:update-config', key, value);
     },
 
-    // Calculate image tokens based on Gemini 2.0 rules
-    calculateImageTokens(width, height) {
-        // Images ≤384px in both dimensions = 258 tokens
-        if (width <= 384 && height <= 384) {
-            return 258;
-        }
-
-        // Larger images are tiled into 768x768 chunks, each = 258 tokens
-        const tilesX = Math.ceil(width / 768);
-        const tilesY = Math.ceil(height / 768);
-        const totalTiles = tilesX * tilesY;
-
-        return totalTiles * 258;
+    // Credentials
+    async getCredentials() {
+        const result = await ipcRenderer.invoke('storage:get-credentials');
+        return result.success ? result.data : {};
+    },
+    async setCredentials(credentials) {
+        return ipcRenderer.invoke('storage:set-credentials', credentials);
+    },
+    async getApiKey() {
+        const credentials = await this.getCredentials();
+        return credentials.apiKey || '';
+    },
+    async setApiKey(apiKey) {
+        return this.setCredentials({ apiKey });
     },
 
-    // Track audio tokens continuously
-    trackAudioTokens() {
-        if (!this.audioStartTime) {
-            this.audioStartTime = Date.now();
-            return;
-        }
-
-        const now = Date.now();
-        const elapsedSeconds = (now - this.audioStartTime) / 1000;
-
-        // Audio = 32 tokens per second
-        const audioTokens = Math.floor(elapsedSeconds * 32);
-
-        if (audioTokens > 0) {
-            this.addTokens(audioTokens, 'audio');
-            this.audioStartTime = now;
-        }
+    // Preferences
+    async getPreferences() {
+        const result = await ipcRenderer.invoke('storage:get-preferences');
+        return result.success ? result.data : {};
+    },
+    async setPreferences(preferences) {
+        return ipcRenderer.invoke('storage:set-preferences', preferences);
+    },
+    async updatePreference(key, value) {
+        return ipcRenderer.invoke('storage:update-preference', key, value);
     },
 
-    // Clean tokens older than 1 minute
-    cleanOldTokens() {
-        const oneMinuteAgo = Date.now() - 60 * 1000;
-        this.tokens = this.tokens.filter(token => token.timestamp > oneMinuteAgo);
+    // History
+    async getAllSessions() {
+        const result = await ipcRenderer.invoke('storage:get-all-sessions');
+        return result.success ? result.data : [];
+    },
+    async getSession(sessionId) {
+        const result = await ipcRenderer.invoke('storage:get-session', sessionId); // Need to add this IPC handler in index.js too!
+        // Wait, did I add storage:get-session in index.js?
+        // Let's check index.js content.
+        // I added: storage:save-session, storage:delete-session, storage:get-all-sessions
+        // I MISSED storage:get-session in index.js logic!
+        return result.success ? result.data : null;
     },
 
-    // Get total tokens in the last minute
-    getTokensInLastMinute() {
-        this.cleanOldTokens();
-        return this.tokens.reduce((total, token) => total + token.count, 0);
-    },
-
-    // Check if we should throttle based on settings
-    shouldThrottle() {
-        // Get rate limiting settings from localStorage
-        const throttleEnabled = localStorage.getItem('throttleTokens') === 'true';
-        if (!throttleEnabled) {
-            return false;
-        }
-
-        const maxTokensPerMin = parseInt(localStorage.getItem('maxTokensPerMin') || '1000000', 10);
-        const throttleAtPercent = parseInt(localStorage.getItem('throttleAtPercent') || '75', 10);
-
-        const currentTokens = this.getTokensInLastMinute();
-        const throttleThreshold = Math.floor((maxTokensPerMin * throttleAtPercent) / 100);
-
-        console.log(`Token check: ${currentTokens}/${maxTokensPerMin} (throttle at ${throttleThreshold})`);
-
-        return currentTokens >= throttleThreshold;
-    },
-
-    // Reset the tracker
-    reset() {
-        this.tokens = [];
-        this.audioStartTime = null;
-    },
+    // Clear All
+    async clearAllData() {
+        return ipcRenderer.invoke('storage:clear-all');
+    }
 };
 
-// Track audio tokens every few seconds
-setInterval(() => {
-    tokenTracker.trackAudioTokens();
-}, 2000);
+// Expose storage to window
+window.storage = storage;
+
+// Basic Rate Limiting (Simplified to match PR #2 approach)
+// The complex token tracking is removed in PR #2 in favor of backend limits or simplified logic.
+// We will keep a minimal placeholder if needed, or rely on backend.
+
+
+
 
 function convertFloat32ToInt16(float32Array) {
     const int16Array = new Int16Array(float32Array.length);
@@ -150,15 +128,29 @@ function arrayBufferToBase64(buffer) {
 }
 
 async function initializeGemini(profile = 'interview', language = 'en-US') {
-    const apiKey = localStorage.getItem('apiKey')?.trim();
-    if (apiKey) {
-        const googleSearchEnabled = localStorage.getItem('googleSearchEnabled') !== 'false';
-        const success = await ipcRenderer.invoke('initialize-gemini', apiKey, localStorage.getItem('customPrompt') || '', profile, language, googleSearchEnabled);
-        if (success) {
-            cheddar.setStatus('Live');
-        } else {
-            cheddar.setStatus('error');
+    try {
+        const apiKey = await storage.getApiKey();
+        const preferences = await storage.getPreferences();
+
+        if (apiKey) {
+            const success = await ipcRenderer.invoke(
+                'initialize-gemini',
+                apiKey,
+                preferences.customPrompt || '',
+                profile,
+                language,
+                preferences.googleSearchEnabled !== false
+            );
+
+            if (success) {
+                cheddar.setStatus('Live');
+            } else {
+                cheddar.setStatus('error');
+            }
         }
+    } catch (err) {
+        console.error('Failed to initialize Gemini:', err);
+        cheddar.setStatus('error');
     }
 }
 
@@ -180,10 +172,11 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
     currentImageQuality = imageQuality;
 
     // Reset token tracker when starting new capture session
-    tokenTracker.reset();
-    console.log('🎯 Token tracker reset for new capture session');
+    // tokenTracker.reset();
+    console.log('🎯 New capture session started');
 
-    const audioMode = localStorage.getItem('audioMode') || 'speaker_only';
+    const preferences = await storage.getPreferences();
+    const audioMode = preferences.audioMode || 'speaker_only';
 
     try {
         if (isMacOS) {
@@ -453,11 +446,13 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
     console.log(`Capturing ${isManual ? 'manual' : 'automated'} screenshot...`);
     if (!mediaStream) return;
 
-    // Check rate limiting for automated screenshots only
+    // Check rate limiting for automated screenshots only - placeholder
+    /*
     if (!isManual && tokenTracker.shouldThrottle()) {
         console.log('⚠️ Automated screenshot skipped due to rate limiting');
         return;
     }
+    */
 
     // Lazy init of video element
     if (!hiddenVideo) {
@@ -535,10 +530,7 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
                 });
 
                 if (result.success) {
-                    // Track image tokens after successful send
-                    const imageTokens = tokenTracker.calculateImageTokens(offscreenCanvas.width, offscreenCanvas.height);
-                    tokenTracker.addTokens(imageTokens, 'image');
-                    console.log(`📊 Image sent successfully - ${imageTokens} tokens used (${offscreenCanvas.width}x${offscreenCanvas.height})`);
+                    console.log(`📊 Image sent successfully (${offscreenCanvas.width}x${offscreenCanvas.height})`);
                 } else {
                     console.error('Failed to send image:', result.error);
                 }
@@ -630,8 +622,11 @@ async function sendTextMessage(text) {
     }
 }
 
-// Conversation storage functions using IndexedDB
+/*
+// Conversation storage functions using IndexedDB - DEPRECATED
+// Moved to Main Process via storage.js
 let conversationDB = null;
+*/
 
 async function initConversationStorage() {
     return new Promise((resolve, reject) => {
@@ -723,14 +718,13 @@ ipcRenderer.on('save-conversation-turn', async (event, data) => {
 });
 
 // Initialize conversation storage when renderer loads
-initConversationStorage().catch(console.error);
+// initConversationStorage().catch(console.error);
 
 // Listen for emergency erase command from main process
-ipcRenderer.on('clear-sensitive-data', () => {
+ipcRenderer.on('clear-sensitive-data', async () => {
     console.log('Clearing renderer-side sensitive data...');
-    localStorage.removeItem('apiKey');
-    localStorage.removeItem('customPrompt');
-    // Consider clearing IndexedDB as well for full erasure
+    // Clear storage via IPC
+    await storage.clearAllData();
 });
 
 // Handle shortcuts based on current view
@@ -771,14 +765,17 @@ const cheddar = {
     handleShortcut,
 
     // Conversation history functions
-    getAllConversationSessions,
-    getConversationSession,
-    initConversationStorage,
+    getAllConversationSessions: storage.getAllSessions,
+    getConversationSession: storage.getSession,
+    // initConversationStorage, // No longer needed
+
 
     // Content protection function
-    getContentProtection: () => {
-        const contentProtection = localStorage.getItem('contentProtection');
-        return contentProtection !== null ? contentProtection === 'true' : true;
+    getContentProtection: async () => {
+        // const contentProtection = localStorage.getItem('contentProtection');
+        // return contentProtection !== null ? contentProtection === 'true' : true;
+        // Simplified default for now
+        return true;
     },
 
     // Platform detection

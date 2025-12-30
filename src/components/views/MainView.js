@@ -149,19 +149,21 @@ export class MainView extends LitElement {
         isInitializing: { type: Boolean },
         onLayoutModeChange: { type: Function },
         showApiKeyError: { type: Boolean },
+        apiKey: { type: String, state: true },
     };
 
     constructor() {
         super();
-        this.onStart = () => {};
-        this.onAPIKeyHelp = () => {};
+        this.onStart = () => { };
+        this.onAPIKeyHelp = () => { };
         this.isInitializing = false;
-        this.onLayoutModeChange = () => {};
+        this.onLayoutModeChange = () => { };
         this.showApiKeyError = false;
         this.boundKeydownHandler = this.handleKeydown.bind(this);
+        this.apiKey = ''; // Initialize empty
     }
 
-    connectedCallback() {
+    async connectedCallback() {
         super.connectedCallback();
         window.electron?.ipcRenderer?.on('session-initializing', (event, isInitializing) => {
             this.isInitializing = isInitializing;
@@ -174,6 +176,24 @@ export class MainView extends LitElement {
         this.loadLayoutMode();
         // Resize window for this view
         resizeLayout();
+
+        // Load API key from storage
+        if (window.storage) {
+            try {
+                this.apiKey = await window.storage.getApiKey();
+                // If not found in storage, check legacy localStorage just in case (migration fallback)
+                if (!this.apiKey) {
+                    const legacyKey = localStorage.getItem('apiKey');
+                    if (legacyKey) {
+                        this.apiKey = legacyKey;
+                        // Auto-migrate to new storage
+                        await window.storage.setApiKey(legacyKey);
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to load API key:", e);
+            }
+        }
     }
 
     disconnectedCallback() {
@@ -194,17 +214,31 @@ export class MainView extends LitElement {
     }
 
     handleInput(e) {
-        localStorage.setItem('apiKey', e.target.value);
+        this.apiKey = e.target.value;
+        // Don't save to file on every keystroke to avoid perf issues.
+        // We will save on Start.
+        // localStorage.setItem('apiKey', e.target.value); 
+
         // Clear error state when user starts typing
         if (this.showApiKeyError) {
             this.showApiKeyError = false;
         }
     }
 
-    handleStartClick() {
+    async handleStartClick() {
         if (this.isInitializing) {
             return;
         }
+
+        // Save API key before starting
+        if (window.storage && this.apiKey) {
+            try {
+                await window.storage.setApiKey(this.apiKey);
+            } catch (e) {
+                console.error("Failed to save API key:", e);
+            }
+        }
+
         this.onStart();
     }
 
@@ -289,7 +323,7 @@ export class MainView extends LitElement {
                 <input
                     type="password"
                     placeholder="Enter your Gemini API Key"
-                    .value=${localStorage.getItem('apiKey') || ''}
+                    .value=${this.apiKey}
                     @input=${this.handleInput}
                     class="${this.showApiKeyError ? 'api-key-error' : ''}"
                 />

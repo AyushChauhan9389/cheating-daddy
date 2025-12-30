@@ -346,6 +346,7 @@ export class HistoryView extends LitElement {
     }
 
     formatDate(timestamp) {
+        if (!timestamp) return '';
         const date = new Date(timestamp);
         return date.toLocaleDateString('en-US', {
             month: 'short',
@@ -355,6 +356,7 @@ export class HistoryView extends LitElement {
     }
 
     formatTime(timestamp) {
+        if (!timestamp) return '';
         const date = new Date(timestamp);
         return date.toLocaleTimeString('en-US', {
             hour: '2-digit',
@@ -363,6 +365,7 @@ export class HistoryView extends LitElement {
     }
 
     formatTimestamp(timestamp) {
+        if (!timestamp) return '';
         const date = new Date(timestamp);
         return date.toLocaleString('en-US', {
             month: 'short',
@@ -373,6 +376,12 @@ export class HistoryView extends LitElement {
     }
 
     getSessionPreview(session) {
+        // With new storage, we might not have conversationHistory in the list view
+        // We can use messageCount to show a summary
+        if (session.messageCount !== undefined) {
+            return `${session.messageCount} messages • ${session.screenAnalysisCount || 0} screens`;
+        }
+
         if (!session.conversationHistory || session.conversationHistory.length === 0) {
             return 'No conversation yet';
         }
@@ -382,8 +391,21 @@ export class HistoryView extends LitElement {
         return preview.length > 100 ? preview.substring(0, 100) + '...' : preview;
     }
 
-    handleSessionClick(session) {
-        this.selectedSession = session;
+    async handleSessionClick(session) {
+        try {
+            this.loading = true;
+            // Fetch full session details
+            const fullSession = await cheddar.getConversationSession(session.sessionId);
+            if (fullSession) {
+                this.selectedSession = fullSession;
+            } else {
+                console.error('Failed to load session details');
+            }
+        } catch (error) {
+            console.error('Error fetching session details:', error);
+        } finally {
+            this.loading = false;
+        }
     }
 
     handleBackClick() {
@@ -428,16 +450,16 @@ export class HistoryView extends LitElement {
         return html`
             <div class="sessions-list">
                 ${this.sessions.map(
-                    session => html`
+            session => html`
                         <div class="session-item" @click=${() => this.handleSessionClick(session)}>
                             <div class="session-header">
-                                <div class="session-date">${this.formatDate(session.timestamp)}</div>
-                                <div class="session-time">${this.formatTime(session.timestamp)}</div>
+                                <div class="session-date">${this.formatDate(session.createdAt || session.timestamp)}</div>
+                                <div class="session-time">${this.formatTime(session.createdAt || session.timestamp)}</div>
                             </div>
                             <div class="session-preview">${this.getSessionPreview(session)}</div>
                         </div>
                     `
-                )}
+        )}
             </div>
         `;
     }
@@ -457,7 +479,7 @@ export class HistoryView extends LitElement {
         return html`
             <div class="sessions-list">
                 ${this.savedResponses.map(
-                    (saved, index) => html`
+            (saved, index) => html`
                         <div class="saved-response-item">
                             <div class="saved-response-header">
                                 <div>
@@ -486,7 +508,7 @@ export class HistoryView extends LitElement {
                             <div class="saved-response-content">${saved.response}</div>
                         </div>
                     `
-                )}
+        )}
             </div>
         `;
     }
@@ -546,8 +568,8 @@ export class HistoryView extends LitElement {
             </div>
             <div class="conversation-view">
                 ${messages.length > 0
-                    ? messages.map(message => html` <div class="message ${message.type}">${message.content}</div> `)
-                    : html`<div class="empty-state">No conversation data available</div>`}
+                ? messages.map(message => html` <div class="message ${message.type}">${message.content}</div> `)
+                : html`<div class="empty-state">No conversation data available</div>`}
             </div>
         `;
     }
