@@ -298,6 +298,20 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
 
                     if (message.serverContent?.turnComplete) {
                         sendToRenderer('update-status', 'Listening...');
+
+                        // Fallback: If generationComplete didn't fire but we have a buffer, clear it now
+                        // This prevents stacking/duplication of messages in the next turn
+                        if (messageBuffer) {
+                            console.log('Clearing message buffer on turnComplete (fallback)');
+
+                            // Save conversation turn if we have data
+                            if (currentTranscription) {
+                                saveConversationTurn(currentTranscription, messageBuffer);
+                                currentTranscription = '';
+                            }
+
+                            messageBuffer = '';
+                        }
                     }
                 },
                 onerror: function (e) {
